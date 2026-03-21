@@ -1,0 +1,10 @@
+requests
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+celery
+redis
+python-jose
+passlib
+python-multipart

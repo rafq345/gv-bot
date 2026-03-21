@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: gv_bot
+      POSTGRES_USER: gv_user
+      POSTGRES_PASSWORD: gv_pass
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    restart: always
+    ports:
+      - "6379:6379"
+
+  backend:
+    build: ./backend
+    restart: always
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
+
+  worker:
+    build: ./backend
+    restart: always
+    command: celery -A celery_app.celery worker --loglevel=info
+    depends_on:
+      - redis
+      - db
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
