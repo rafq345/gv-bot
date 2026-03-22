@@ -8,6 +8,11 @@ import json
 from datetime import datetime, timedelta
 from urllib.parse import parse_qsl
 
+from pydantic import BaseModel
+from typing import Dict
+import requests
+import os
+
 # Сторонние библиотеки
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -207,3 +212,116 @@ def get_last_meal(telegram_id: int):
         "foods": meal.vision_json,
         "status": meal.status
     }
+
+class Event(BaseModel):
+    user_id: str
+    channel: str
+    type: str
+    payload: Dict
+
+@app.post("/events")
+def handle_event(event: Event):
+    print("EVENT:", event)
+
+    if event.type == "text":
+        return process_text(event)
+
+    if event.type == "image":
+        return process_image(event)
+
+    return {"status": "ignored"}
+
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+def send_message(chat_id, text, buttons=None):
+    import requests
+    import os
+    import json
+
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+    data = {
+        "chat_id": chat_id,
+        "text": text
+    }
+
+    if buttons:
+        data["reply_markup"] = {
+            "inline_keyboard": buttons
+        }
+
+    requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+        json=data
+    )
+
+def process_text(event):
+    text = event.payload.get("text")
+    send_message(event.user_id, f"Ты написал: {text}")
+    return {"status": "ok"}
+
+def download_telegram_file(file_id):
+    import requests
+    import os
+
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+    # 1. получаем file_path
+    res = requests.get(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/getFile",
+        params={"file_id": file_id}
+    ).json()
+
+    file_path = res["result"]["file_path"]
+
+    # 2. скачиваем файл
+    file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+
+    file_bytes = requests.get(file_url).content
+
+    return file_bytes
+
+def analyze_with_vision(image_bytes):
+    # ВРЕМЕННО (пока подключаешь свою реальную функцию)
+    return [
+        {"name": "Творог", "grams": 150},
+        {"name": "Клубника", "grams": 50}
+    ]
+
+def process_image(event):
+    chat_id = event.user_id
+    file_id = event.payload["file_id"]
+
+    send_message(chat_id, "Обрабатываю фото...")
+
+    try:
+        # 1. скачать фото
+        image_bytes = download_telegram_file(file_id)
+
+        # 2. AI
+        foods = analyze_with_vision(image_bytes)
+
+        # 3. текст
+        text = "Вот что я нашёл:\n\n"
+        for food in foods:
+            text += f"• {food['name']} — {food['grams']} г\n"
+
+        text += "\nВсё верно?"
+
+        # 4. кнопки
+        buttons = [
+            [
+                {"text": "✅ Да", "callback_data": "confirm_yes"},
+                {"text": "✏️ Изменить", "callback_data": "confirm_edit"}
+            ]
+        ]
+
+        # 5. отправка (ВАЖНО — внутри try)
+        send_message(chat_id, text, buttons)
+
+    except Exception as e:
+        print("ERROR:", e)
+        send_message(chat_id, "Ошибка обработки 😢")
+
+    return {"status": "ok"}
