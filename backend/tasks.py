@@ -3,11 +3,29 @@ from database import SessionLocal
 from models import Meal, User
 from services.gemma_vision_service import GemmaVisionService
 from celery_app import celery
+import requests
+import os
 
+def send_message(chat_id, text, buttons=None):
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+    data = {
+        "chat_id": chat_id,
+        "text": text
+    }
+
+    if buttons:
+        data["reply_markup"] = {
+            "inline_keyboard": buttons
+        }
+
+    requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+        json=data
+    )
 
 @celery.task(name="tasks.vision_task")
-def vision_task(image_bytes: bytes, telegram_id: int):
-
+def vision_task(image_bytes, telegram_id, meal_id):
     print("=== TASK START ===")
 
     detected_foods = GemmaVisionService.detect_products(image_bytes)
@@ -15,33 +33,43 @@ def vision_task(image_bytes: bytes, telegram_id: int):
 
     db = SessionLocal()
 
-    user = db.query(User).filter(User.telegram_id == telegram_id).first()
-    print("USER:", user)
+    meal = db.query(Meal).filter(Meal.id == meal_id).first()
 
-    if not user:
-        print("USER NOT FOUND → creating")
-        user = User(telegram_id=telegram_id)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+    if not meal:
+        print("MEAL NOT FOUND")
+        db.close()
+        return
 
     try:
-        meal = Meal(
-            user_id=user.id,
-            vision_json=detected_foods,
-            status="waiting_confirmation"
-        )
+        # 1. обновляем БД
+        meal.vision_json = detected_foods
+        meal.status = "waiting_confirmation"
 
-        print("ADDING MEAL")
-
-        db.add(meal)
         db.commit()
-        db.refresh(meal)
 
-        print("MEAL SAVED:", meal.id)
+        print(f"[MEAL UPDATED] id={meal.id}")
+
+        # 2. формируем текст
+        text = "Вот что я нашёл:\n\n"
+
+        for food in detected_foods:
+            text += f"• {food['name']} — {food['grams']} г\n"
+
+        text += "\nВсё верно?"
+
+        # 3. кнопки
+        buttons = [
+            [
+                {"text": "✅ Да", "callback_data": "confirm_yes"},
+                {"text": "✏️ Изменить", "callback_data": "confirm_edit"}
+            ]
+        ]
+
+        # 4. отправка пользователю
+        send_message(telegram_id, text, buttons)
 
     except Exception as e:
-        print("ERROR SAVING MEAL:", str(e))
+        print("ERROR:", str(e))
         db.rollback()
 
     finally:
@@ -49,4 +77,4 @@ def vision_task(image_bytes: bytes, telegram_id: int):
 
     print("=== TASK END ===")
 
-    return {"meal_id": meal.id, "foods": detected_foods}
+    return {"meal_id": meal.id}

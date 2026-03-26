@@ -15,15 +15,10 @@ class Meal(Base):
     __tablename__ = "meals"
 
     id = Column(Integer, primary_key=True)
-
     user_id = Column(Integer, ForeignKey("users.id"))
-
     created_at = Column(TIMESTAMP, server_default=func.now())
-
     meal_type = Column(Text)
-
     photo_url = Column(Text)
-
     vision_json = Column(JSON)
-
     status = Column(Text)
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())

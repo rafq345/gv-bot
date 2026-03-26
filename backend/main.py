@@ -229,6 +229,9 @@ def handle_event(event: Event):
     if event.type == "image":
         return process_image(event)
 
+    if event.type == "callback":
+    	return process_callback(event)
+
     return {"status": "ignored"}
 
 
@@ -290,38 +293,62 @@ def analyze_with_vision(image_bytes):
     ]
 
 def process_image(event):
+    print("PROCESS_IMAGE CALLED")
     chat_id = event.user_id
     file_id = event.payload["file_id"]
+
+    db = SessionLocal()
 
     send_message(chat_id, "Обрабатываю фото...")
 
     try:
-        # 1. скачать фото
+        # 1. найти пользователя
+        user = db.query(User).filter(User.telegram_id == chat_id).first()
+        if not user:
+            user = User(telegram_id=chat_id)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
+        # 2. скачать фото
         image_bytes = download_telegram_file(file_id)
 
-        # 2. AI
-        foods = analyze_with_vision(image_bytes)
+        # 3. СОЗДАЁМ MEAL (КЛЮЧЕВОЕ)
+        meal = Meal(
+            user_id=user.id,
+            status="processing",
+            vision_json=None
+        )
 
-        # 3. текст
-        text = "Вот что я нашёл:\n\n"
-        for food in foods:
-            text += f"• {food['name']} — {food['grams']} г\n"
+        db.add(meal)
+        db.commit()
+        db.refresh(meal)
 
-        text += "\nВсё верно?"
+        print(f"[MEAL CREATED] id={meal.id}")
 
-        # 4. кнопки
-        buttons = [
-            [
-                {"text": "✅ Да", "callback_data": "confirm_yes"},
-                {"text": "✏️ Изменить", "callback_data": "confirm_edit"}
-            ]
-        ]
+        # 4. отправляем в Celery
+        vision_task.delay(image_bytes, chat_id, meal.id)
 
-        # 5. отправка (ВАЖНО — внутри try)
-        send_message(chat_id, text, buttons)
+        # 5. временный ответ (пока без результата)
+        send_message(chat_id, "Фото получил, анализирую...")
 
     except Exception as e:
         print("ERROR:", e)
         send_message(chat_id, "Ошибка обработки 😢")
+
+    finally:
+        db.close()
+
+    return {"status": "ok"}
+
+def process_callback(event):
+    chat_id = event.user_id
+    data = event.payload["data"]
+
+    if data == "confirm_yes":
+        send_message(chat_id, "Отлично! Сейчас дам рекомендации...")
+
+    elif data == "confirm_edit":
+        send_message(chat_id, "Напиши, что исправить ✏️")
 
     return {"status": "ok"}
