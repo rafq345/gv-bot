@@ -1,0 +1,86 @@
+from sqlalchemy.orm import Session
+from database import SessionLocal
+from models import Meal, User
+from services.gemma_vision_service import GemmaVisionService
+from celery_app import celery
+import requests
+import os
+from backend.celery_app import celery_app
+from backend.services.gemma_vision_service import GemmaVisionService
+from backend.services.nutrition_service import NutritionService
+
+vision = GemmaVisionService()
+nutrition = NutritionService()
+
+def send_message(chat_id, text, buttons=None):
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+    data = {
+        "chat_id": chat_id,
+        "text": text
+    }
+
+    if buttons:
+        data["reply_markup"] = {
+            "inline_keyboard": buttons
+        }
+
+    requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+        json=data
+    )
+
+@celery.task(name="tasks.vision_task")
+def vision_task(image_bytes, telegram_id, meal_id):
+    print("=== TASK START ===")
+
+    detected_foods = GemmaVisionService.detect_products(image_bytes)
+    print("DETECTED:", detected_foods)
+
+    db = SessionLocal()
+
+    meal = db.query(Meal).filter(Meal.id == meal_id).first()
+
+    if not meal:
+        print("MEAL NOT FOUND")
+        db.close()
+        return
+
+    try:
+        # 1. обновляем БД
+        meal.vision_json = detected_foods
+        meal.status = "waiting_confirmation"
+
+        db.commit()
+
+        print(f"[MEAL UPDATED] id={meal.id}")
+
+        # 2. формируем текст
+        text = "Вот что я нашёл:\n\n"
+
+        for food in detected_foods:
+            text += f"• {food['name']} — {food['grams']} г\n"
+
+        text += "\nВсё верно?"
+
+        # 3. кнопки
+        buttons = [
+            [
+                {"text": "✅ Да", "callback_data": "confirm_yes"},
+                {"text": "✏️ Изменить", "callback_data": "confirm_edit"}
+            ]
+        ]
+
+        # 4. отправка пользователю
+        send_message(telegram_id, text, buttons)
+
+    except Exception as e:
+        print("ERROR:", str(e))
+        db.rollback()
+
+    finally:
+        db.close()
+
+    print("=== TASK END ===")
+
+    return {"meal_id": meal.id}

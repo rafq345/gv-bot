@@ -255,7 +255,7 @@ def handle_event(event: Event):
         return process_image(event)
 
     if event.type == "callback":
-        return process_callback(event)
+    	return process_callback(event)
 
     return {"status": "ignored"}
 
@@ -324,7 +324,6 @@ def process_image(event):
     db = SessionLocal()
 
     send_message(chat_id, "Обрабатываю фото...")
-
     try:
         # 1. найти пользователя
         user = db.query(User).filter(User.telegram_id == chat_id).first()
@@ -333,10 +332,8 @@ def process_image(event):
             db.add(user)
             db.commit()
             db.refresh(user)
-
         # 2. скачать фото
         image_bytes = download_telegram_file(file_id)
-
         # 3. создать meal
         meal = Meal(
             user_id=user.id,
@@ -348,19 +345,24 @@ def process_image(event):
         db.refresh(meal)
 
         print(f"[MEAL CREATED] id={meal.id}")
-
+        # 4. сохранить файл
+        import uuid
+        file_id_local = str(uuid.uuid4())
+        file_path = f"/tmp/{file_id_local}.jpg"
+        with open(file_path, "wb") as f:
+            f.write(image_bytes)
         # 5. celery
+        from tasks import process_food
         #process_food.delay(file_path)
-        process_food.delay(image_bytes, chat_id, meal.id)
-
+	process_food.delay(image_bytes, chat_id, meal.id)
+        # 6. ответ пользователю
+        send_message(chat_id, "Фото получил, анализирую...")
     except Exception as e:
         import traceback
         traceback.print_exc()
         send_message(chat_id, f"Ошибка: {str(e)}")
-
     finally:
         db.close()
-
     return {"status": "ok"}
 
 def process_callback(event):

@@ -71,7 +71,7 @@ async def analyze_food(file: UploadFile = File(...)):
         f.write(content)
 
     from backend.tasks import process_food
-    task = process_food.delay(image_bytes, chat_id, meal.id)
+    task = process_food.delay(file_path)
 
     return {"task_id": task.id}
 
@@ -114,12 +114,12 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-#def get_db():
-#    db = SessionLocal()
-#    try:
-#        yield db
-#    finally:
-#        db.close()
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 @app.get("/check_access/{telegram_id}")
 def check_access(telegram_id: str):
@@ -198,19 +198,12 @@ def analyze_meal(
     db: Session = Depends(get_db)
 ):
     contents = file.file.read()
+    print("BACKEND: received image, size =", len(contents))
 
-    # сохраняем файл временно
-    import uuid
-    file_id = str(uuid.uuid4())
-    file_path = f"/tmp/{file_id}.jpg"
-
-    with open(file_path, "wb") as f:
-        f.write(contents)
-
-    print("BACKEND: saved image to", file_path)
-
-    # запускаем celery pipeline
-    task = process_food.delay(file_path)
+    task = vision_task.delay(
+        image_bytes=contents,
+        telegram_id=payload["telegram_id"]
+    )
 
     return {"task_id": task.id}
 
@@ -255,7 +248,7 @@ def handle_event(event: Event):
         return process_image(event)
 
     if event.type == "callback":
-        return process_callback(event)
+    	return process_callback(event)
 
     return {"status": "ignored"}
 
@@ -310,17 +303,18 @@ def download_telegram_file(file_id):
 
     return file_bytes
 
-#def analyze_with_vision(image_bytes):
+def analyze_with_vision(image_bytes):
     # ВРЕМЕННО (пока подключаешь свою реальную функцию)
-#    return [
-#        {"name": "Творог", "grams": 150},
-#        {"name": "Клубника", "grams": 50}
-#    ]
+    return [
+        {"name": "Творог", "grams": 150},
+        {"name": "Клубника", "grams": 50}
+    ]
 
 def process_image(event):
     print("PROCESS_IMAGE CALLED")
     chat_id = event.user_id
     file_id = event.payload["file_id"]
+
     db = SessionLocal()
 
     send_message(chat_id, "Обрабатываю фото...")
@@ -337,26 +331,28 @@ def process_image(event):
         # 2. скачать фото
         image_bytes = download_telegram_file(file_id)
 
-        # 3. создать meal
+        # 3. СОЗДАЁМ MEAL (КЛЮЧЕВОЕ)
         meal = Meal(
             user_id=user.id,
             status="processing",
             vision_json=None
         )
+
         db.add(meal)
         db.commit()
         db.refresh(meal)
 
         print(f"[MEAL CREATED] id={meal.id}")
 
-        # 5. celery
-        #process_food.delay(file_path)
-        process_food.delay(image_bytes, chat_id, meal.id)
+        # 4. отправляем в Celery
+        vision_task.delay(image_bytes, chat_id, meal.id)
+
+        # 5. временный ответ (пока без результата)
+        send_message(chat_id, "Фото получил, анализирую...")
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        send_message(chat_id, f"Ошибка: {str(e)}")
+        print("ERROR:", e)
+        send_message(chat_id, "Ошибка обработки 😢")
 
     finally:
         db.close()

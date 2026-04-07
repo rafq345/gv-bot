@@ -20,3 +20,17 @@ class NutritionCalculatorService:
             "fat": total_fat,
             "carbs": total_carbs
         }
+
+class NutritionService:
+
+    def analyze(self, vision_data):
+        # предполагаем, что vision_data — это список продуктов
+        # если структура другая — потом поправим
+
+        calculator = NutritionCalculatorService()
+        nutrition = calculator.calculate(vision_data)
+
+        return {
+            "nutrition": nutrition,
+            "comment": "Анализ выполнен"
+        }
